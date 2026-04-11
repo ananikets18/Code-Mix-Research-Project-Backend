@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # Main NLP API service (with Upstash Redis)
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nlp-api
+    ports:
+      - "${PORT:-8000}:8000"
+    environment:
+      # ========================================
+      # Core Settings (Optimized for 8GB Droplet)
+      # ========================================
+      - API_ENV=${API_ENV:-production}
+      - DEBUG=${DEBUG:-false}
+      - HOST=0.0.0.0
+      - PORT=8000
+      - WORKERS=${WORKERS:-1}  # 1 worker for 8GB Droplet with 4 ML models
+      
+      # ========================================
+      # Security & API Settings
+      # ========================================
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
+      - API_KEY=${API_KEY}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      
+      # ========================================
+      # Rate Limiting
+      # ========================================
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-30}
+      - RATE_LIMIT_PER_HOUR=${RATE_LIMIT_PER_HOUR:-500}
+      
+      # ========================================
+      # Logging & Monitoring
+      # ========================================
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - INDIC_RESOURCES_PATH=./indic_nlp_resources
+      
+      # ========================================
+      # Upstash Redis Configuration (REST API)
+      # ========================================
+      - REDIS_ENABLED=${REDIS_ENABLED:-true}
+      - UPSTASH_REDIS_REST_URL=${UPSTASH_REDIS_REST_URL}
+      - UPSTASH_REDIS_REST_TOKEN=${UPSTASH_REDIS_REST_TOKEN}
+      - REDIS_TTL=${REDIS_TTL:-3600}
+      - REDIS_MAX_RETRIES=${REDIS_MAX_RETRIES:-3}
+      - REDIS_TIMEOUT=${REDIS_TIMEOUT:-10}
+      
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./adaptive_learning:/app/adaptive_learning
+      - ./romanized_dictionaries:/app/romanized_dictionaries
+      - ./ai4bharatIndicBERTv2-alpha-SentimentClassification:/app/ai4bharatIndicBERTv2-alpha-SentimentClassification
+      - ./oleksiizirka-xlm-roberta-toxicity-classifier:/app/oleksiizirka-xlm-roberta-toxicity-classifier
+      
+    restart: unless-stopped
+    
+    # Resource limits for 8GB Droplet
+    deploy:
+      resources:
+        limits:
+          memory: 7G
+          cpus: '1.8'
+    
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s  # Models take time to load on first request
+      
+    networks:
+      - nlp-network
+
+  # ========================================
+  # Nginx reverse proxy (HTTP only - no SSL)
+  # Add SSL later when domain is configured
+  # ========================================
+  nginx:
+    image: nginx:alpine
+    container_name: nlp-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Mount nginx configuration
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      
+      # Mount logs directory
+      - ./logs/nginx:/var/log/nginx
+      
+      # Mount SSL Certificates
+      - ./nginx/ssl:/etc/letsencrypt:ro
+      
+    depends_on:
+      api:
+        condition: service_healthy  # Wait for API health check
+    
+    restart: unless-stopped
+    
+    networks:
+      - nlp-network
+
+
+# ========================================
+# Networks
+# ========================================
+networks:
+  nlp-network:
+    driver: bridge
+
+
+# ========================================
+# Volumes
+# ========================================
+volumes:
+  logs:
+    driver: local
+  data:
+    driver: local
